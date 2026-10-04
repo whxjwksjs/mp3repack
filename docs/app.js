@@ -3,121 +3,98 @@ const fileInput = document.getElementById('fileInput');
 const results = document.getElementById('results');
 const preserveId3Checkbox = document.getElementById('preserveId3');
 
-let worker = null;
-let pendingFiles = [];
+const w = new Worker('worker.js');
+const jobs = new Map();
+let jobId = 0;
 
-function getWorker() {
-  if (!worker) {
-    worker = new Worker('worker.js', { type: 'module' });
-    worker.onmessage = handleWorkerMessage;
-    worker.onerror = (e) => {
-      console.error('Worker error:', e);
-      addError('Worker failed to start. Try a different browser.');
-    };
-  }
-  return worker;
-}
-
-function handleWorkerMessage(e) {
+w.onmessage = (e) => {
   const { id, ok, result, error } = e.data;
-  const card = document.getElementById(`card-${id}`);
-  if (!card) return;
-
+  const job = jobs.get(id);
+  if (!job) return;
+  jobs.delete(id);
+  const card = job.card;
   if (!ok) {
-    card.querySelector('.progress').innerHTML = `<span class="error">Error: ${escapeHtml(error)}</span>`;
+    card.querySelector('.status').innerHTML = `<span class="err">Error: ${escapeHtml(error)}</span>`;
     return;
   }
+  const r = result;
+  const savedPct = r.inputBytes > 0 ? (100 * r.savedBytes / r.inputBytes) : 0;
+  const barWidth = r.inputBytes > 0 ? Math.min(100, 100 * r.outputBytes / r.inputBytes) : 100;
 
-  const { outputBytes, inputBytes, savedBytes, passthrough, reason } = result;
-  const pct = inputBytes > 0 ? (savedBytes / inputBytes * 100).toFixed(2) : '0.00';
-
-  const blob = new Blob([result.output], { type: 'audio/mpeg' });
-  const url = URL.createObjectURL(blob);
-  const origName = card.dataset.filename;
-  const newName = origName.replace(/\.mp3$/i, '') + '.repacked.mp3';
-
-  let statsHtml;
-  if (passthrough) {
-    statsHtml = `<div class="stat">No savings possible — <span class="error">${escapeHtml(reason || 'already optimal')}</span></div>`;
+  let statusHtml;
+  if (r.passthrough) {
+    statusHtml = `<span class="status">No savings — ${escapeHtml(r.reason || 'already optimal')}</span>`;
   } else {
-    statsHtml = `
-      <div class="stat">Original: <b>${formatBytes(inputBytes)}</b></div>
-      <div class="stat">Repacked: <b>${formatBytes(outputBytes)}</b></div>
-      <div class="stat saved">Saved: <b>${formatBytes(savedBytes)} (${pct}%)</b></div>
+    statusHtml = `
+      <div class="stats">
+        <div class="stat"><div class="label">Original</div><div class="value">${fmtBytes(r.inputBytes)}</div></div>
+        <div class="stat"><div class="label">Repacked</div><div class="value">${fmtBytes(r.outputBytes)}</div></div>
+        <div class="stat"><div class="label">Saved</div><div class="value saved">${fmtBytes(r.savedBytes)} (${savedPct.toFixed(1)}%)</div></div>
+      </div>
+      <div class="bar"><div class="fill" style="width:${barWidth.toFixed(1)}%"></div></div>
     `;
   }
 
-  card.querySelector('.progress').innerHTML = `
-    <div class="stats">${statsHtml}</div>
-    ${!passthrough ? `<a class="download-btn" href="${url}" download="${escapeHtml(newName)}">⬇ Download repacked MP3</a>` : ''}
+  let downloadHtml = '';
+  if (!r.passthrough || r.output) {
+    const blob = new Blob([r.output], { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(blob);
+    const outName = job.file.name.replace(/\.mp3$/i, '') + '.repacked.mp3';
+    downloadHtml = `<a class="btn primary" href="${url}" download="${escapeHtml(outName)}">Download</a>`;
+  }
+
+  card.innerHTML = `
+    <div class="name">${escapeHtml(job.file.name)}</div>
+    ${statusHtml}
+    <div class="actions">${downloadHtml}</div>
   `;
+};
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(2) + ' MB';
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
 }
 
-function formatBytes(b) {
-  if (b < 1024) return b + ' B';
-  if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
-  return (b/1024/1024).toFixed(2) + ' MB';
-}
-
-let nextId = 0;
-
-function processFiles(files) {
-  results.classList.add('show');
-  const w = getWorker();
-
-  for (const file of files) {
-    if (!file.name.toLowerCase().endsWith('.mp3') && file.type !== 'audio/mpeg') {
-      continue;
-    }
-    const id = nextId++;
-    const card = document.createElement('div');
-    card.className = 'file-card';
-    card.id = `card-${id}`;
-    card.dataset.filename = file.name;
-    card.innerHTML = `
-      <div class="file-name">${escapeHtml(file.name)}</div>
-      <div class="progress">Repacking…</div>
-    `;
-    results.prepend(card);
-
-    file.arrayBuffer().then(buf => {
-      w.postMessage({ id, buffer: buf, preserveId3: preserveId3Checkbox.checked }, [buf]);
-    }).catch(err => {
-      card.querySelector('.progress').innerHTML = `<span class="error">Could not read file</span>`;
-    });
-  }
+function processFile(file) {
+  const id = ++jobId;
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="name">${escapeHtml(file.name)}</div>
+    <div class="status">Processing…</div>
+  `;
+  results.prepend(card);
+  jobs.set(id, { file, card });
+  file.arrayBuffer().then(buf => {
+    w.postMessage({ id, buffer: buf, preserveId3: preserveId3Checkbox.checked }, [buf]);
+  }).catch(() => {
+    card.querySelector('.status').innerHTML = `<span class="err">Could not read file</span>`;
+    jobs.delete(id);
+  });
 }
 
 drop.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', (e) => {
-  processFiles(e.target.files);
+fileInput.addEventListener('change', () => {
+  for (const f of fileInput.files) processFile(f);
   fileInput.value = '';
 });
-
-['dragenter', 'dragover'].forEach(ev => {
-  drop.addEventListener(ev, (e) => {
-    e.preventDefault();
-    drop.classList.add('dragover');
-  });
+['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault();
+  drop.classList.add('over');
+}));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+}));
+drop.addEventListener('drop', e => {
+  for (const f of e.dataTransfer.files) {
+    if (/\.mp3$/i.test(f.name) || f.type === 'audio/mpeg') processFile(f);
+  }
 });
-['dragleave', 'drop'].forEach(ev => {
-  drop.addEventListener(ev, (e) => {
-    e.preventDefault();
-    drop.classList.remove('dragover');
-  });
-});
-drop.addEventListener('drop', (e) => {
-  processFiles(e.dataTransfer.files);
-});
-
-function addError(msg) {
-  const div = document.createElement('div');
-  div.className = 'file-card';
-  div.innerHTML = `<span class="error">${escapeHtml(msg)}</span>`;
-  results.prepend(div);
-  results.classList.add('show');
-}
