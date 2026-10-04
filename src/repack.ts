@@ -158,12 +158,19 @@ function repackVerbatim(input: Uint8Array, s: ReturnType<typeof parseMp3>, optio
   let totalLen = 0;
   for (const f of frames) totalLen += f.frameLength;
   const id3Len = options.preserveId3v2 ? s.id3v2Bytes : 0;
-  const out = new Uint8Array(id3Len + totalLen);
-  if (id3Len > 0) out.set(input.subarray(0, id3Len), 0);
-  let pos = id3Len;
+  const trailLen = s.trailingBytes;
+  const out = new Uint8Array(id3Len + totalLen + trailLen);
+  let pos = 0;
+  if (id3Len > 0) {
+    out.set(input.subarray(0, id3Len), pos);
+    pos += id3Len;
+  }
   for (const f of frames) {
     out.set(input.subarray(f.offset, f.offset + f.frameLength), pos);
     pos += f.frameLength;
+  }
+  if (trailLen > 0) {
+    out.set(input.subarray(s.audioEnd, s.audioEnd + trailLen), pos);
   }
   return {
     output: out,
@@ -458,11 +465,22 @@ export function repackMp3(input: Uint8Array, options: RepackOptions = {}): Repac
   }
 
   // Optional: preserve ID3v2 tag by prepending it to the output
+  // Always preserve trailing bytes (may contain ID3v1 or partial frames)
   let finalOut = out;
-  if (options.preserveId3v2 && s.id3v2Bytes > 0) {
-    finalOut = new Uint8Array(s.id3v2Bytes + out.length);
-    finalOut.set(input.subarray(0, s.id3v2Bytes), 0);
-    finalOut.set(out, s.id3v2Bytes);
+  const id3Len = options.preserveId3v2 ? s.id3v2Bytes : 0;
+  const trailLen = s.trailingBytes;
+  if (id3Len > 0 || trailLen > 0) {
+    finalOut = new Uint8Array(id3Len + out.length + trailLen);
+    let pos = 0;
+    if (id3Len > 0) {
+      finalOut.set(input.subarray(0, id3Len), pos);
+      pos += id3Len;
+    }
+    finalOut.set(out, pos);
+    pos += out.length;
+    if (trailLen > 0) {
+      finalOut.set(input.subarray(s.audioEnd, s.audioEnd + trailLen), pos);
+    }
   }
 
   return {
