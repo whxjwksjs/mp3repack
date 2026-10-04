@@ -93,6 +93,33 @@ function buildXing(nFrames, newLens, totalBytes, isVbr) {
     // quality: 0
     return xing;
 }
+/**
+ * Safe fallback: copy frames verbatim (no resizing), strip ID3v2 if requested.
+ * Used when smart repacking fails due to reservoir constraints.
+ */
+function repackVerbatim(input, s, options) {
+    const frames = s.frames;
+    let totalLen = 0;
+    for (const f of frames)
+        totalLen += f.frameLength;
+    const id3Len = options.preserveId3v2 ? s.id3v2Bytes : 0;
+    const out = new Uint8Array(id3Len + totalLen);
+    if (id3Len > 0)
+        out.set(input.subarray(0, id3Len), 0);
+    let pos = id3Len;
+    for (const f of frames) {
+        out.set(input.subarray(f.offset, f.offset + f.frameLength), pos);
+        pos += f.frameLength;
+    }
+    return {
+        output: out,
+        inputBytes: input.length,
+        outputBytes: out.length,
+        savedBytes: input.length - out.length,
+        passthrough: false,
+        reason: "verbatim copy (reservoir constraints prevented shrinking)",
+    };
+}
 export function repackMp3(input, options = {}) {
     // Safety checks: free-format and MP3Pro must passthrough byte-identically.
     // Free-format has non-standard frame sizes we can't reframe safely.
@@ -214,23 +241,50 @@ export function repackMp3(input, options = {}) {
         const extra = 0;
         // Find smallest legal frame size with accSlack + (L - h - len_i) >= poolStart
         // and L >= h + extra.
+        // Strategy: find the frame size that best fits the data (minimizes
+        // |slack change|), removing padding without accumulating reservoir.
+        // We only consider sizes <= original (shrink, never grow) where the
+        // frame's own data fits (len - h >= poolLens).
         let picked = null;
         const table = bitrateTable(f);
-        outer: for (let brIdx = 1; brIdx <= 14; brIdx++) {
+        const slackLo = poolStart;
+        const slackHi = poolStart + maxMdb;
+        if (accSlack < slackLo || accSlack > slackHi) {
+            // Reservoir diverged; fall back to verbatim copy (still strips ID3v2)
+            return repackVerbatim(input, s, options);
+        }
+        let bestSlackDiff = Infinity;
+        for (let brIdx = 1; brIdx <= 14; brIdx++) {
             if (table[brIdx] === 0)
                 continue;
             for (const pad of [false, true]) {
                 const len = frameLengthFor(f, brIdx, pad);
                 if (len < h + extra)
                     continue;
-                if (accSlack + (len - h - poolLens[i]) >= poolStart) {
+                if (len > f.frameLength)
+                    continue; // only shrink, never grow
+                // Note: len - h may be < poolLens[i]; the difference comes from
+                // reservoir (previous frames' areas). This is legal as long as
+                // the resulting mdb' stays within [0, maxMdb].
+                const newSlack = accSlack + (len - h - poolLens[i]);
+                if (newSlack < slackLo || newSlack > slackHi)
+                    continue;
+                const slackDiff = Math.abs(len - h - poolLens[i]);
+                if (slackDiff < bestSlackDiff) {
+                    bestSlackDiff = slackDiff;
                     picked = { brIdx, pad, len };
-                    break outer;
                 }
             }
         }
-        if (!picked)
-            return fail(`frame ${i}: no legal size satisfies reservoir constraints`);
+        if (!picked) {
+            // No smaller size fits; try original size. If that also violates bounds,
+            // fall back to verbatim copy.
+            const newSlack = accSlack + (f.frameLength - h - poolLens[i]);
+            if (newSlack < slackLo || newSlack > slackHi) {
+                return repackVerbatim(input, s, options);
+            }
+            picked = { brIdx: f.bitrateIndex, pad: f.padding, len: f.frameLength };
+        }
         newLen[i] = picked.len;
         newBrIdx[i] = picked.brIdx;
         newPad[i] = picked.pad;

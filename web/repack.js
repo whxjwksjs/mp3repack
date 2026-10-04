@@ -263,8 +263,9 @@ export function repackMp3(input, options = {}) {
                     continue;
                 if (len > f.frameLength)
                     continue; // only shrink, never grow
-                if (len - h < poolLens[i])
-                    continue; // must fit own data
+                // Note: len - h may be < poolLens[i]; the difference comes from
+                // reservoir (previous frames' areas). This is legal as long as
+                // the resulting mdb' stays within [0, maxMdb].
                 const newSlack = accSlack + (len - h - poolLens[i]);
                 if (newSlack < slackLo || newSlack > slackHi)
                     continue;
