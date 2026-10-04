@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MP3 Repack — Lossless MP3 Shrinker</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a1a2e">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #1a1a2e; color: #eee;
+    margin: 0; padding: 20px;
+    min-height: 100vh;
+  }
+  .container { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 8px; }
+  .subtitle { color: #aaa; margin-bottom: 24px; font-size: 0.9rem; }
+  #drop {
+    border: 2px dashed #555; border-radius: 12px;
+    padding: 48px 20px; text-align: center;
+    cursor: pointer; transition: all 0.2s;
+    background: #16213e;
+  }
+  #drop:hover, #drop.dragover {
+    border-color: #4ecca3; background: #1a2a4a;
+  }
+  #drop.dragover { transform: scale(1.02); }
+  .hint { color: #888; font-size: 0.85rem; margin-top: 12px; }
+  #fileInput { display: none; }
+  .results { margin-top: 24px; display: none; }
+  .results.show { display: block; }
+  .file-card {
+    background: #16213e; border-radius: 8px;
+    padding: 16px; margin-bottom: 12px;
+  }
+  .file-name { font-weight: 600; margin-bottom: 8px; word-break: break-all; }
+  .stats { display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.9rem; }
+  .stat { color: #aaa; }
+  .stat b { color: #4ecca3; }
+  .stat.saved b { color: #4ecca3; font-size: 1.1rem; }
+  .progress { color: #888; font-size: 0.9rem; }
+  .error { color: #ff6b6b; }
+  .download-btn {
+    display: inline-block; margin-top: 12px;
+    background: #4ecca3; color: #1a1a2e;
+    padding: 10px 20px; border-radius: 6px;
+    text-decoration: none; font-weight: 600;
+    border: none; cursor: pointer; font-size: 0.95rem;
+  }
+  .download-btn:hover { background: #3dbb92; }
+  .note {
+    margin-top: 24px; padding: 12px;
+    background: #16213e; border-radius: 8px;
+    font-size: 0.85rem; color: #888;
+  }
+  .note b { color: #aaa; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🎵 MP3 Repack</h1>
+  <div class="subtitle">Losslessly shrink MP3 files — no recompression, decoded audio bit-identical. 100% offline, files never leave your device.</div>
+
+  <div id="drop">
+    <div style="font-size: 2rem; margin-bottom: 8px;">📁</div>
+    <div>Drop MP3 files here or tap to browse</div>
+    <div class="hint">Works offline • Android &amp; desktop browsers</div>
+  </div>
+  <input type="file" id="fileInput" accept=".mp3,audio/mpeg" multiple>
+
+  <div style="margin-top: 12px;">
+    <label style="font-size: 0.9rem; color: #aaa; cursor: pointer;">
+      <input type="checkbox" id="preserveId3" style="margin-right: 6px;">
+      Preserve ID3v2 tags (cover art, metadata)
+    </label>
+  </div>
+
+  <div class="results" id="results"></div>
+
+  <div class="note">
+    <b>How it works:</b> MP3 frames often contain unused padding bytes. MP3 Repack removes the padding and reframes the audio data losslessly — like zipping, but MP3-aware. The decoded audio is bit-for-bit identical to the original.
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+</script>
+</body>
+</html>
